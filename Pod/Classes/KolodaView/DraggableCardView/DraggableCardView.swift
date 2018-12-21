@@ -18,7 +18,9 @@ public enum DragSpeed: TimeInterval {
 
 protocol DraggableCardDelegate: class {
     
-    func card(_ card: DraggableCardView, wasDraggedWithFinishPercentage percentage: CGFloat, inDirection direction: SwipeResultDirection)
+    func card(_ card: DraggableCardView, wasDraggedWithFinishPercentage percentage: CGFloat, inDirection direction: SwipeResultDirection, rotationAngle:CGFloat)
+    func card(_ card: DraggableCardView, shouldDragCanceledInDirection direction: SwipeResultDirection)
+
     func card(_ card: DraggableCardView, wasSwipedIn direction: SwipeResultDirection)
     func card(_ card: DraggableCardView, shouldSwipeIn direction: SwipeResultDirection) -> Bool
     func card(cardWasReset card: DraggableCardView)
@@ -35,6 +37,9 @@ protocol DraggableCardDelegate: class {
 private let defaultRotationMax: CGFloat = 1.0
 private let defaultRotationAngle = CGFloat(Double.pi) / 10.0
 private let defaultScaleMin: CGFloat = 0.8
+// DUCDV: Start edit
+private let defaultRotatePercent: CGFloat = 20 // 20%
+// DUCDV: End edit
 
 private let screenSize = UIScreen.main.bounds.size
 
@@ -58,7 +63,7 @@ public class DraggableCardView: UIView, UIGestureRecognizerDelegate {
         }
     }
     
-    private var overlayView: OverlayView?
+    private var overlayView: CardOverlayView?
     private(set) var contentView: UIView?
     
     private var panGestureRecognizer: UIPanGestureRecognizer!
@@ -115,7 +120,7 @@ public class DraggableCardView: UIView, UIGestureRecognizerDelegate {
     }
     
     //MARK: Configurations
-    func configure(_ view: UIView, overlayView: OverlayView?) {
+    func configure(_ view: UIView, overlayView: CardOverlayView?) {
         self.overlayView?.removeFromSuperview()
         self.contentView?.removeFromSuperview()
         
@@ -223,9 +228,11 @@ public class DraggableCardView: UIView, UIGestureRecognizerDelegate {
     //MARK: GestureRecognizers
     @objc func panGestureRecognized(_ gestureRecognizer: UIPanGestureRecognizer) {
         dragDistance = gestureRecognizer.translation(in: self)
-        
         let touchLocation = gestureRecognizer.location(in: self)
         
+        // DUCDV: Start edit
+        dragDistance.y = 1
+        // DUCDV: End edit
         switch gestureRecognizer.state {
         case .began:
             
@@ -240,16 +247,18 @@ public class DraggableCardView: UIView, UIGestureRecognizerDelegate {
             dragBegin = true
             
             animationDirectionY = touchLocation.y >= frame.size.height / 2 ? -1.0 : 1.0
+
             layer.rasterizationScale = UIScreen.main.scale
             layer.shouldRasterize = true
             delegate?.card(cardPanBegan: self)
             
         case .changed:
             let rotationStrength = min(dragDistance.x / frame.width, rotationMax)
-            let rotationAngle = animationDirectionY * self.rotationAngle * rotationStrength
-            let scaleStrength = 1 - ((1 - scaleMin) * abs(rotationStrength))
+            // DUCDV: Start edit
+            let rotationAngle =  self.rotationAngle * rotationStrength
+            // DUCDV: End edit
+            let scaleStrength = 1 - ((1 - scaleMin) * fabs(rotationStrength))
             let scale = max(scaleStrength, scaleMin)
-    
             var transform = CATransform3DIdentity
             transform = CATransform3DScale(transform, scale, scale, 1)
             transform = CATransform3DRotate(transform, rotationAngle, 0, 0, 1)
@@ -260,10 +269,32 @@ public class DraggableCardView: UIView, UIGestureRecognizerDelegate {
             updateOverlayWithFinishPercent(percentage, direction:dragDirection)
             if let dragDirection = dragDirection {
                 //100% - for proportion
-                delegate?.card(self, wasDraggedWithFinishPercentage: min(abs(100 * percentage), 100), inDirection: dragDirection)
+                let p = min(fabs(100 * percentage), 100)
+                delegate?.card(self, wasDraggedWithFinishPercentage: p, inDirection: dragDirection,rotationAngle:rotationAngle)
             }
             
         case .ended:
+            let vel = gestureRecognizer.velocity(in: self)
+            if vel.x >= 0 {
+                if ((dragPercentage + vel.x) / self.bounds.width) >= 0.7 {
+                    swipeMadeActionNew()
+                } else {
+                    if let dragDirection = dragDirection{
+                        self.delegate?.card(self, shouldDragCanceledInDirection: dragDirection)
+                    }
+                    resetViewPositionAndTransformations()
+                }
+            } else {
+                if ((dragPercentage - vel.x) / self.bounds.width) >= 0.7 {
+                    swipeMadeActionNew()
+                } else {
+                    if let dragDirection = dragDirection{
+                        self.delegate?.card(self, shouldDragCanceledInDirection: dragDirection)
+                    }
+                    resetViewPositionAndTransformations()
+                }
+            }
+            
             swipeMadeAction()
             delegate?.card(cardPanFinished: self)
             layer.shouldRasterize = false
@@ -337,13 +368,16 @@ public class DraggableCardView: UIView, UIGestureRecognizerDelegate {
         overlayView?.update(progress: progress)
     }
     
-    private func swipeMadeAction() {
+    private func swipeMadeActionNew() {
         let shouldSwipe = { direction in
             return self.delegate?.card(self, shouldSwipeIn: direction) ?? true
         }
-        if let dragDirection = dragDirection , shouldSwipe(dragDirection) && dragPercentage >= swipePercentageMargin && directions.contains(dragDirection) {
+        if let dragDirection = dragDirection , shouldSwipe(dragDirection) && directions.contains(dragDirection) {
             swipeAction(dragDirection)
         } else {
+            if let dragDirection = dragDirection{
+                self.delegate?.card(self, shouldDragCanceledInDirection: dragDirection)
+            }
             resetViewPositionAndTransformations()
         }
     }
